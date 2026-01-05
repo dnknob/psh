@@ -1,11 +1,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#ifndef READLINE
-#include <readline/readline.h>
-#include <readline/history.h>
-#endif /* READLINE */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +9,11 @@
 #include <libgen.h>
 #include <unistd.h>
 #include <pwd.h>
+
+#ifndef READLINE
+#include <readline/readline.h>
+#include <readline/history.h>
+#endif /* READLINE */
 
 #define MAXJOBS 64
 

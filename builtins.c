@@ -1,9 +1,5 @@
 #include <sys/wait.h>
 
-#ifndef READLINE
-#include <readline/history.h>
-#endif /* READLINE */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +9,10 @@
 #include <errno.h>
 #include <pwd.h>
 #include <termios.h>
+
+#ifndef READLINE
+#include <readline/history.h>
+#endif /* READLINE */
 
 extern int sort(const struct dirent **a, const struct dirent **b);
 
