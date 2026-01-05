@@ -5,7 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <limits.h>
+#include <libgen.h>
 #include <unistd.h>
+#include <pwd.h>
 
 #define MAXJOBS 64
 
@@ -26,10 +29,42 @@ void handle(int sig) {
     write(STDOUT_FILENO, "\n", 1);
 }
 
-void check(void) {
-    if (geteuid() == 0) printf("# ");
-    else printf("$ ");
+int check(void) {
+    char *user = getlogin();
+    char hostname[HOST_NAME_MAX + 1];
+    char path[1024];
+    char *folder;
+    char *perm;
+
+    if (getcwd(path, sizeof(path)) != NULL) {
+        folder = basename(path);
+    } else {
+        folder = "?";
+    }
+
+    if (gethostname(hostname, sizeof(hostname)) != 0) {
+        snprintf(hostname, sizeof(hostname), "unknown-host");
+    }
+
+    if (geteuid() == 0) {
+        perm = "#";
+    } else {
+        perm = "$";
+    }
+
+    if (user) {
+        printf("%s@%s:%s %s ", user, hostname, folder, perm);
+    } else {
+        struct passwd *pw = getpwuid(getuid());
+        if (pw) {
+            printf("%s@%s:%s %s ", pw->pw_name, hostname, folder, perm);
+        } else {
+            printf("unknown@%s:%s %s ", hostname, folder, perm);
+        }
+    }
+
     fflush(stdout);
+    return 0;
 }
 
 int main(void) {
