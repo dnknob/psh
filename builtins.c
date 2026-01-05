@@ -1,5 +1,9 @@
 #include <sys/wait.h>
 
+#ifndef READLINE
+#include <readline/history.h>
+#endif /* READLINE */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -193,3 +197,33 @@ int builtin_fg(int argc, char *argv[]) {
 
     return 0;
 }
+
+#ifndef READLINE
+int builtin_history(int argc, char *argv[]) {
+  const char *history_path = ".psh_history";
+
+  if (argc < 2) {
+      printf("usage: %s [--list]\n", argv[0]);
+      return 1;
+  }
+
+  if (strcmp(argv[1], "--list") == 0) {
+      read_history(history_path); 
+
+      HIST_ENTRY **list = history_list();
+      if (list) {
+          printf("--- Past Command History ---\n");
+          for (int i = 0; list[i]; i++) {
+              printf("%d: %s\n", i + history_base, list[i]->line);
+          }
+      } else {
+          printf("No history found\n");
+      }
+  } else {
+      printf("history: Unknown argument: %s\n", argv[1]);
+  }
+
+  write_history(history_path);
+  return 0;
+}
+#endif /* READLINE */
