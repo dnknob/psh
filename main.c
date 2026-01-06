@@ -28,6 +28,7 @@ extern int builtin_jobs(pid_t job_pids[], int *job_count);
 extern int builtin_fg(int argc, char *argv[]);
 extern int builtin_history(int argc, char *argv[]);
 extern int builtin_export(int argc, char *argv[]);
+extern int builtin_set(int argc, char *argv[]);
 
 char inb[1024];
 
@@ -191,6 +192,12 @@ int main(void) {
 
         if (strcmp(argv[0], "export") == 0) {
             builtin_export(argc, argv);
+            free(argv);
+            continue;
+        }
+
+        if (strcmp(argv[0], "set") == 0) {
+            builtin_set(argc, argv);
             free(argv);
             continue;
         }

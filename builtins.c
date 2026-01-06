@@ -221,6 +221,22 @@ int builtin_export(int argc, char *argv[]) {
     return 0;
 }
 
+int builtin_set(int argc, char *argv[]) {
+    char buffer[256];
+
+    FILE *fp = popen("sh -c 'set'", "r");
+
+    if (fp == NULL) {
+        perror("popen failed");
+        return 1;
+    }
+
+    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+        printf("%s", buffer);
+    }
+    pclose(fp);
+    return 0;
+}
 
 #ifndef READLINE
 int builtin_history(int argc, char *argv[]) {
