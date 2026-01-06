@@ -198,6 +198,30 @@ int builtin_fg(int argc, char *argv[]) {
     return 0;
 }
 
+int builtin_export(int argc, char *argv[]) {
+    if (argc < 3) {
+        fprintf(stderr, "Usage: %s key=value command [args...]\n", argv[0]);
+        return 1;
+    }
+
+    if (putenv(argv[1]) != 0) {
+        perror("export: putenv failed");
+        return 1;
+    }
+
+    char **new_argv = &argv[2];
+
+    printf("Executing child with environment variable: %s\n", argv[1]);
+
+    if (execvp(new_argv[0], new_argv) == -1) {
+        perror("export: execution failed");
+        exit(1);
+    }
+
+    return 0;
+}
+
+
 #ifndef READLINE
 int builtin_history(int argc, char *argv[]) {
   const char *history_path = ".psh_history";
