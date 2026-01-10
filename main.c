@@ -9,8 +9,9 @@
 #include <unistd.h>
 #include <pwd.h>
 #include <termios.h>
+#include <errno.h>
 
-#ifndef READLINE
+#ifdef USE_READLINE
 #include <readline/readline.h>
 #include <readline/history.h>
 #endif
@@ -18,17 +19,25 @@
 #define MAXJOBS 64
 #define MAX_INPUT_SIZE 1024
 #define MAX_PATH_SIZE 1024
+#define MAX_COMMAND_SIZE 256
+#define HOSTNAME_SIZE 256
+
+typedef struct {
+    pid_t pid;
+    char command[MAX_COMMAND_SIZE];
+    int is_stopped;
+} Job;
 
 extern int builtin_cd(int argc, char *argv[]);
-extern int builtin_pwd();
+extern int builtin_pwd(void);
 extern int builtin_ls(int argc, char *argv[]);
 extern int builtin_echo(int argc, char *argv[]);
-extern int builtin_clear();
+extern int builtin_clear(void);
 extern int builtin_cat(int argc, char *argv[]);
-extern int builtin_whoami();
-extern int builtin_jobs(pid_t job_pids[], int *job_count);
-extern int builtin_fg(int argc, char *argv[], pid_t job_pids[], int *job_count);
-extern int builtin_bg(int argc, char *argv[], pid_t job_pids[], int job_count);
+extern int builtin_whoami(void);
+extern int builtin_jobs(Job jobs[], int *job_count);
+extern int builtin_fg(int argc, char *argv[], Job jobs[], int *job_count);
+extern int builtin_bg(int argc, char *argv[], Job jobs[], int job_count);
 extern int builtin_kill(int argc, char *argv[]);
 extern int builtin_history(int argc, char *argv[]);
 extern int builtin_export(int argc, char *argv[]);
@@ -40,7 +49,7 @@ void handle_sigint(int sig) {
 }
 
 void display_prompt(void) {
-    char hostname[256];
+    char hostname[HOSTNAME_SIZE];
     char path[MAX_PATH_SIZE];
     char path_copy[MAX_PATH_SIZE];
     char *folder;
@@ -74,17 +83,18 @@ void display_prompt(void) {
 
 int parse_command(char *input, char ***argv_ptr) {
     int argc = 0;
-    char **argv = malloc((strlen(input) / 2 + 2) * sizeof(char *));
-    
+    size_t max_args = strlen(input) / 2 + 2;
+    char **argv = malloc(max_args * sizeof(char *));
+
     if (argv == NULL) {
         perror("malloc");
         return -1;
     }
 
-    char *token = strtok(input, " ");
-    while (token != NULL) {
+    char *token = strtok(input, " \t");
+    while (token != NULL && argc < (int)max_args - 1) {
         argv[argc++] = token;
-        token = strtok(NULL, " ");
+        token = strtok(NULL, " \t");
     }
     argv[argc] = NULL;
 
@@ -100,7 +110,23 @@ int check_background(int *argc, char **argv) {
     return 0;
 }
 
-int execute_builtin(int argc, char **argv, pid_t job_pids[], int *job_count) {
+void build_command_string(char *dest, size_t size, char **argv) {
+    dest[0] = '\0';
+    size_t len = 0;
+    
+    for (int i = 0; argv[i] != NULL && len < size - 1; i++) {
+        if (i > 0 && len < size - 1) {
+            dest[len++] = ' ';
+        }
+        size_t arg_len = strlen(argv[i]);
+        size_t copy_len = (len + arg_len < size - 1) ? arg_len : size - len - 1;
+        memcpy(dest + len, argv[i], copy_len);
+        len += copy_len;
+    }
+    dest[len] = '\0';
+}
+
+int execute_builtin(int argc, char **argv, Job jobs[], int *job_count) {
     if (strcmp(argv[0], "exit") == 0) return -1;
     if (strcmp(argv[0], "cd") == 0) { builtin_cd(argc, argv); return 1; }
     if (strcmp(argv[0], "pwd") == 0) { builtin_pwd(); return 1; }
@@ -109,25 +135,25 @@ int execute_builtin(int argc, char **argv, pid_t job_pids[], int *job_count) {
     if (strcmp(argv[0], "clear") == 0) { builtin_clear(); return 1; }
     if (strcmp(argv[0], "cat") == 0) { builtin_cat(argc, argv); return 1; }
     if (strcmp(argv[0], "whoami") == 0) { builtin_whoami(); return 1; }
-    if (strcmp(argv[0], "jobs") == 0) { builtin_jobs(job_pids, job_count); return 1; }
-    if (strcmp(argv[0], "fg") == 0) { builtin_fg(argc, argv, job_pids, job_count); return 1; }
-    if (strcmp(argv[0], "bg") == 0) { builtin_bg(argc, argv, job_pids, *job_count); return 1; }
+    if (strcmp(argv[0], "jobs") == 0) { builtin_jobs(jobs, job_count); return 1; }
+    if (strcmp(argv[0], "fg") == 0) { builtin_fg(argc, argv, jobs, job_count); return 1; }
+    if (strcmp(argv[0], "bg") == 0) { builtin_bg(argc, argv, jobs, *job_count); return 1; }
     if (strcmp(argv[0], "kill") == 0) { builtin_kill(argc, argv); return 1; }
     if (strcmp(argv[0], "export") == 0) { builtin_export(argc, argv); return 1; }
     if (strcmp(argv[0], "set") == 0) { builtin_set(argc, argv); return 1; }
     if (strcmp(argv[0], "history") == 0) { builtin_history(argc, argv); return 1; }
-    
+
     return 0;
 }
 
-void reap_background_jobs(pid_t job_pids[], int *job_count) {
+void reap_background_jobs(Job jobs[], int *job_count) {
     for (int i = 0; i < *job_count; i++) {
         int status;
-        pid_t result = waitpid(job_pids[i], &status, WNOHANG | WUNTRACED);
-        
+        pid_t result = waitpid(jobs[i].pid, &status, WNOHANG | WUNTRACED);
+
         if (result > 0 && (WIFEXITED(status) || WIFSIGNALED(status))) {
             for (int j = i; j < *job_count - 1; j++) {
-                job_pids[j] = job_pids[j + 1];
+                jobs[j] = jobs[j + 1];
             }
             (*job_count)--;
             i--;
@@ -135,9 +161,9 @@ void reap_background_jobs(pid_t job_pids[], int *job_count) {
     }
 }
 
-void execute_external(char **argv, int background, pid_t job_pids[], int *job_count, pid_t shell_pgid) {
+void execute_external(char **argv, int background, Job jobs[], int *job_count, pid_t shell_pgid) {
     pid_t pid = fork();
-    
+
     if (pid == 0) {
         setpgid(0, 0);
         if (!background) {
@@ -153,14 +179,19 @@ void execute_external(char **argv, int background, pid_t job_pids[], int *job_co
             fprintf(stderr, "psh: %s: command not found\n", argv[0]);
         }
         exit(EXIT_FAILURE);
-        
+
     } else if (pid > 0) {
         setpgid(pid, pid);
-        
+
         if (background) {
             if (*job_count < MAXJOBS) {
-                job_pids[(*job_count)++] = pid;
+                jobs[*job_count].pid = pid;
+                jobs[*job_count].is_stopped = 0;
+                build_command_string(jobs[*job_count].command, MAX_COMMAND_SIZE, argv);
+                (*job_count)++;
                 printf("[%d] %d\n", *job_count, pid);
+            } else {
+                fprintf(stderr, "psh: maximum number of jobs reached\n");
             }
         } else {
             tcsetpgrp(STDIN_FILENO, pid);
@@ -170,7 +201,10 @@ void execute_external(char **argv, int background, pid_t job_pids[], int *job_co
 
             if (WIFSTOPPED(status)) {
                 if (*job_count < MAXJOBS) {
-                    job_pids[(*job_count)++] = pid;
+                    jobs[*job_count].pid = pid;
+                    jobs[*job_count].is_stopped = 1;
+                    build_command_string(jobs[*job_count].command, MAX_COMMAND_SIZE, argv);
+                    (*job_count)++;
                     printf("\n[%d] Stopped %d\n", *job_count, pid);
                 }
             }
@@ -193,18 +227,36 @@ void setup_signals(void) {
 }
 
 int main(void) {
-    pid_t job_pids[MAXJOBS];
+    Job jobs[MAXJOBS];
     int job_count = 0;
     char input_buffer[MAX_INPUT_SIZE];
 
     setup_signals();
     pid_t shell_pgid = getpgrp();
 
+#ifdef USE_READLINE
+    using_history();
+#endif
+
     while (1) {
-        reap_background_jobs(job_pids, &job_count);
+        reap_background_jobs(jobs, &job_count);
 
         display_prompt();
 
+        char *line = NULL;
+
+#ifdef USE_READLINE
+        line = readline("");
+        if (!line) {
+            break;
+        }
+        if (strlen(line) > 0) {
+            add_history(line);
+        }
+        strncpy(input_buffer, line, MAX_INPUT_SIZE - 1);
+        input_buffer[MAX_INPUT_SIZE - 1] = '\0';
+        free(line);
+#else
         if (!fgets(input_buffer, sizeof(input_buffer), stdin)) {
             if (feof(stdin)) {
                 break;
@@ -212,29 +264,23 @@ int main(void) {
             clearerr(stdin);
             continue;
         }
-
         input_buffer[strcspn(input_buffer, "\n")] = '\0';
-
-	#ifndef READLINE
-        if (strlen(input_buffer) > 0) {
-            add_history(input_buffer);
-        }
-	#endif
+#endif
 
         if (strlen(input_buffer) == 0) {
             continue;
         }
 
-        char **argv;
+        char **argv = NULL;
         int argc = parse_command(input_buffer, &argv);
-        if (argc <= 0) {
-            free(argv);
+        if (argc <= 0 || argv == NULL) {
+            if (argv) free(argv);
             continue;
         }
 
         int background = check_background(&argc, argv);
 
-        int builtin_result = execute_builtin(argc, argv, job_pids, &job_count);
+        int builtin_result = execute_builtin(argc, argv, jobs, &job_count);
         if (builtin_result == -1) {
             free(argv);
             break;
@@ -243,7 +289,7 @@ int main(void) {
             continue;
         }
 
-        execute_external(argv, background, job_pids, &job_count, shell_pgid);
+        execute_external(argv, background, jobs, &job_count, shell_pgid);
 
         free(argv);
     }
