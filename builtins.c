@@ -14,6 +14,12 @@
 #include <readline/history.h>
 #endif /* READLINE */
 
+typedef struct {
+    pid_t pid;
+    char command[256];
+    int is_stopped;
+} Job;
+
 extern int sort(const struct dirent **a, const struct dirent **b);
 
 int builtin_cd(int argc, char *argv[]) {
@@ -100,11 +106,11 @@ int builtin_cat(int argc, char *argv[]) {
     FILE *fptr = fopen(argv[1], "r");
 
     if (fptr == NULL) {
-        perror("cat"); 
+        perror("cat");
         return 1;
     }
 
-    int ch; 
+    int ch;
     while ((ch = fgetc(fptr)) != EOF) {
         if (putchar(ch) == EOF) {
             perror("cat: Write error");
@@ -133,68 +139,68 @@ int builtin_whoami() {
   return 0;
 }
 
-int builtin_jobs(pid_t job_pids[], int *job_count) {
+int builtin_jobs(Job jobs[], int *job_count) {
     if (*job_count <= 0) {
         printf("No active background jobs.\n");
         return 0;
     }
-
     for (int i = 0; i < *job_count; i++) {
-        int status;
-        pid_t result = waitpid(job_pids[i], &status, WNOHANG | WUNTRACED);
-
-        if (result == 0) {
-            printf("[%d] Running    (PID: %d)\n", i + 1, job_pids[i]);
-        } else {
-            if (WIFEXITED(status) || WIFSIGNALED(status)) {
-                printf("[%d] Done       (PID: %d)\n", i + 1, job_pids[i]);
-
-                for (int j = i; j < *job_count - 1; j++) {
-                    job_pids[j] = job_pids[j + 1];
-                }
-                (*job_count)--;
-                i--;
-            } else if (WIFSTOPPED(status)) {
-                printf("[%d] Stopped    (PID: %d)\n", i + 1, job_pids[i]);
-            }
-        }
+        printf("[%d] %-10s %s (PID: %d)\n", 
+               i + 1, jobs[i].is_stopped ? "Stopped" : "Running", 
+               jobs[i].command, jobs[i].pid);
     }
     return 0;
 }
 
-int builtin_fg(int argc, char *argv[]) {
-    if (argc < 2) {
-        fprintf(stderr, "usage: fg <PID>\n");
-        return 1;
-    }
+int builtin_fg(int argc, char *argv[], Job jobs[], int *job_count) {
+    if (argc < 2) { printf("usage: fg <%%jobid>\n"); return 1; }
+    int idx = atoi(&argv[1][1]) - 1;
+    if (idx < 0 || idx >= *job_count) return 1;
 
-    pid_t target_pid = (pid_t)atoi(argv[1]);
+    pid_t pid = jobs[idx].pid;
     int status;
+    tcsetpgrp(STDIN_FILENO, pid);
+    kill(pid, SIGCONT);
+    waitpid(pid, &status, WUNTRACED);
+    tcsetpgrp(STDIN_FILENO, getpgrp());
 
-    signal(SIGTTOU, SIG_IGN);
-    signal(SIGTTIN, SIG_IGN);
+    if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        for (int j = idx; j < *job_count - 1; j++) jobs[j] = jobs[j + 1];
+        (*job_count)--;
+    } else if (WIFSTOPPED(status)) {
+        jobs[idx].is_stopped = 1;
+    }
+    return 0;
+}
 
-    if (kill(target_pid, SIGCONT) < 0) {
-        perror("fg: kill (SIGCONT)");
+int builtin_bg(int argc, char *argv[], Job jobs[], int job_count) {
+    if (argc < 2) { printf("usage: bg <%%jobid>\n"); return 1; }
+    int idx = atoi(&argv[1][1]) - 1;
+    if (idx < 0 || idx >= job_count) return 1;
+
+    jobs[idx].is_stopped = 0;
+    kill(jobs[idx].pid, SIGCONT);
+    printf("[%d] %s resumed in background\n", idx + 1, jobs[idx].command);
+    return 0;
+}
+
+int builtin_kill(int argc, char *argv[]) {
+    if (argc < 2) {
+        printf("usage: kill <PID or %%jobid>\n");
         return 1;
     }
-
-    if (tcsetpgrp(0, getpgid(target_pid)) < 0) {
-        perror("fg: tcsetpgrp");
+    
+    pid_t pid;
+    if (argv[1][0] == '%') {
+        return 0; 
+    }
+    
+    pid = (pid_t)atoi(argv[1]);
+    if (kill(pid, SIGKILL) == -1) {
+        perror("kill");
         return 1;
     }
-
-    waitpid(target_pid, &status, WUNTRACED);
-
-    tcsetpgrp(0, getpgrp());
-
-    signal(SIGTTOU, SIG_DFL);
-    signal(SIGTTIN, SIG_DFL);
-
-    if (WIFSTOPPED(status)) {
-        printf("\n[%d] Stopped\n", target_pid);
-    }
-
+    printf("Process %d terminated.\n", pid);
     return 0;
 }
 
@@ -238,7 +244,6 @@ int builtin_set(int argc, char *argv[]) {
     return 0;
 }
 
-#ifndef READLINE
 int builtin_history(int argc, char *argv[]) {
   const char *history_path = ".psh_history";
 
@@ -248,7 +253,7 @@ int builtin_history(int argc, char *argv[]) {
   }
 
   if (strcmp(argv[1], "--list") == 0) {
-      read_history(history_path); 
+      read_history(history_path);
 
       HIST_ENTRY **list = history_list();
       if (list) {
@@ -266,4 +271,3 @@ int builtin_history(int argc, char *argv[]) {
   write_history(history_path);
   return 0;
 }
-#endif /* READLINE */
