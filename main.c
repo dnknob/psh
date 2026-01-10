@@ -48,14 +48,16 @@ void handle_sigint(int sig) {
     write(STDOUT_FILENO, "\n", 1);
 }
 
-void display_prompt(void) {
+void display_prompt(int last_exit_status) {
     char hostname[HOSTNAME_SIZE];
     char path[MAX_PATH_SIZE];
-    char path_copy[MAX_PATH_SIZE];
-    char *folder;
+    char display_path[MAX_PATH_SIZE];
     const char *prompt_symbol;
     char *username = NULL;
     struct passwd *pw;
+    const char *home;
+
+    (void)last_exit_status;
 
     username = getlogin();
     if (username == NULL) {
@@ -69,15 +71,24 @@ void display_prompt(void) {
     hostname[sizeof(hostname) - 1] = '\0';
 
     if (getcwd(path, sizeof(path)) != NULL) {
-        snprintf(path_copy, sizeof(path_copy), "%s", path);
-        folder = basename(path_copy);
+        home = getenv("HOME");
+        if (home != NULL && strncmp(path, home, strlen(home)) == 0) {
+            if (path[strlen(home)] == '\0') {
+                snprintf(display_path, sizeof(display_path), "~");
+            } else {
+                snprintf(display_path, sizeof(display_path), "~%s", path + strlen(home));
+            }
+        } else {
+            snprintf(display_path, sizeof(display_path), "%s", path);
+        }
     } else {
-        folder = "?";
+        snprintf(display_path, sizeof(display_path), "?");
     }
 
     prompt_symbol = (geteuid() == 0) ? "#" : "$";
 
-    printf("%s@%s:%s %s ", username, hostname, folder, prompt_symbol);
+    printf("%s@%s:%s %s ", username, hostname, display_path, prompt_symbol);
+
     fflush(stdout);
 }
 
@@ -113,7 +124,7 @@ int check_background(int *argc, char **argv) {
 void build_command_string(char *dest, size_t size, char **argv) {
     dest[0] = '\0';
     size_t len = 0;
-    
+
     for (int i = 0; argv[i] != NULL && len < size - 1; i++) {
         if (i > 0 && len < size - 1) {
             dest[len++] = ' ';
@@ -128,22 +139,22 @@ void build_command_string(char *dest, size_t size, char **argv) {
 
 int execute_builtin(int argc, char **argv, Job jobs[], int *job_count) {
     if (strcmp(argv[0], "exit") == 0) return -1;
-    if (strcmp(argv[0], "cd") == 0) { builtin_cd(argc, argv); return 1; }
-    if (strcmp(argv[0], "pwd") == 0) { builtin_pwd(); return 1; }
-    if (strcmp(argv[0], "ls") == 0) { builtin_ls(argc, argv); return 1; }
-    if (strcmp(argv[0], "echo") == 0) { builtin_echo(argc, argv); return 1; }
-    if (strcmp(argv[0], "clear") == 0) { builtin_clear(); return 1; }
-    if (strcmp(argv[0], "cat") == 0) { builtin_cat(argc, argv); return 1; }
-    if (strcmp(argv[0], "whoami") == 0) { builtin_whoami(); return 1; }
-    if (strcmp(argv[0], "jobs") == 0) { builtin_jobs(jobs, job_count); return 1; }
-    if (strcmp(argv[0], "fg") == 0) { builtin_fg(argc, argv, jobs, job_count); return 1; }
-    if (strcmp(argv[0], "bg") == 0) { builtin_bg(argc, argv, jobs, *job_count); return 1; }
-    if (strcmp(argv[0], "kill") == 0) { builtin_kill(argc, argv); return 1; }
-    if (strcmp(argv[0], "export") == 0) { builtin_export(argc, argv); return 1; }
-    if (strcmp(argv[0], "set") == 0) { builtin_set(argc, argv); return 1; }
-    if (strcmp(argv[0], "history") == 0) { builtin_history(argc, argv); return 1; }
+    if (strcmp(argv[0], "cd") == 0) return builtin_cd(argc, argv);
+    if (strcmp(argv[0], "pwd") == 0) { builtin_pwd(); return 0; }
+    if (strcmp(argv[0], "ls") == 0) { builtin_ls(argc, argv); return 0; }
+    if (strcmp(argv[0], "echo") == 0) { builtin_echo(argc, argv); return 0; }
+    if (strcmp(argv[0], "clear") == 0) { builtin_clear(); return 0; }
+    if (strcmp(argv[0], "cat") == 0) { builtin_cat(argc, argv); return 0; }
+    if (strcmp(argv[0], "whoami") == 0) { builtin_whoami(); return 0; }
+    if (strcmp(argv[0], "jobs") == 0) { builtin_jobs(jobs, job_count); return 0; }
+    if (strcmp(argv[0], "fg") == 0) { builtin_fg(argc, argv, jobs, job_count); return 0; }
+    if (strcmp(argv[0], "bg") == 0) { builtin_bg(argc, argv, jobs, *job_count); return 0; }
+    if (strcmp(argv[0], "kill") == 0) { builtin_kill(argc, argv); return 0; }
+    if (strcmp(argv[0], "export") == 0) { builtin_export(argc, argv); return 0; }
+    if (strcmp(argv[0], "set") == 0) { builtin_set(argc, argv); return 0; }
+    if (strcmp(argv[0], "history") == 0) { builtin_history(argc, argv); return 0; }
 
-    return 0;
+    return -2;
 }
 
 void reap_background_jobs(Job jobs[], int *job_count) {
@@ -161,8 +172,9 @@ void reap_background_jobs(Job jobs[], int *job_count) {
     }
 }
 
-void execute_external(char **argv, int background, Job jobs[], int *job_count, pid_t shell_pgid) {
+int execute_external(char **argv, int background, Job jobs[], int *job_count, pid_t shell_pgid) {
     pid_t pid = fork();
+    int exit_status = 0;
 
     if (pid == 0) {
         setpgid(0, 0);
@@ -207,11 +219,18 @@ void execute_external(char **argv, int background, Job jobs[], int *job_count, p
                     (*job_count)++;
                     printf("\n[%d] Stopped %d\n", *job_count, pid);
                 }
+            } else if (WIFEXITED(status)) {
+                exit_status = WEXITSTATUS(status);
+            } else if (WIFSIGNALED(status)) {
+                exit_status = 128 + WTERMSIG(status);
             }
         }
     } else {
         perror("fork");
+        return 1;
     }
+    
+    return exit_status;
 }
 
 void setup_signals(void) {
@@ -230,6 +249,7 @@ int main(void) {
     Job jobs[MAXJOBS];
     int job_count = 0;
     char input_buffer[MAX_INPUT_SIZE];
+    int last_status = 0;
 
     setup_signals();
     pid_t shell_pgid = getpgrp();
@@ -241,7 +261,7 @@ int main(void) {
     while (1) {
         reap_background_jobs(jobs, &job_count);
 
-        display_prompt();
+        display_prompt(last_status);
 
         char *line = NULL;
 
@@ -284,12 +304,13 @@ int main(void) {
         if (builtin_result == -1) {
             free(argv);
             break;
-        } else if (builtin_result == 1) {
+        } else if (builtin_result >= 0) {
+            last_status = builtin_result;
             free(argv);
             continue;
         }
 
-        execute_external(argv, background, jobs, &job_count, shell_pgid);
+        last_status = execute_external(argv, background, jobs, &job_count, shell_pgid);
 
         free(argv);
     }
