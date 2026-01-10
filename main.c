@@ -40,28 +40,33 @@ void handle_sigint(int sig) {
 }
 
 void display_prompt(void) {
-    char *username = getlogin();
-    char hostname[HOST_NAME_MAX + 1];
+    char hostname[256];
     char path[MAX_PATH_SIZE];
+    char path_copy[MAX_PATH_SIZE];
     char *folder;
     const char *prompt_symbol;
+    char *username = NULL;
+    struct passwd *pw;
 
-    if (getcwd(path, sizeof(path)) != NULL) {
-        folder = basename(path);
-    } else {
-        folder = "?";
+    username = getlogin();
+    if (username == NULL) {
+        pw = getpwuid(getuid());
+        username = (pw != NULL) ? pw->pw_name : "unknown";
     }
 
     if (gethostname(hostname, sizeof(hostname)) != 0) {
         snprintf(hostname, sizeof(hostname), "unknown-host");
     }
+    hostname[sizeof(hostname) - 1] = '\0';
+
+    if (getcwd(path, sizeof(path)) != NULL) {
+        snprintf(path_copy, sizeof(path_copy), "%s", path);
+        folder = basename(path_copy);
+    } else {
+        folder = "?";
+    }
 
     prompt_symbol = (geteuid() == 0) ? "#" : "$";
-
-    if (username == NULL) {
-        struct passwd *pw = getpwuid(getuid());
-        username = pw ? pw->pw_name : "unknown";
-    }
 
     printf("%s@%s:%s %s ", username, hostname, folder, prompt_symbol);
     fflush(stdout);
@@ -210,9 +215,11 @@ int main(void) {
 
         input_buffer[strcspn(input_buffer, "\n")] = '\0';
 
+	#ifndef READLINE
         if (strlen(input_buffer) > 0) {
             add_history(input_buffer);
         }
+	#endif
 
         if (strlen(input_buffer) == 0) {
             continue;
