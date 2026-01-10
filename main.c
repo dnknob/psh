@@ -145,7 +145,7 @@ void execute_external(char **argv, int background, pid_t job_pids[], int *job_co
         signal(SIGTTOU, SIG_DFL);
 
         if (execvp(argv[0], argv) == -1) {
-            fprintf(stderr, "sh: %s: command not found\n", argv[0]);
+            fprintf(stderr, "psh: %s: command not found\n", argv[0]);
         }
         exit(EXIT_FAILURE);
         
