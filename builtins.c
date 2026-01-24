@@ -24,14 +24,31 @@ typedef struct {
 extern int sort(const struct dirent **a, const struct dirent **b);
 
 int builtin_cd(int argc, char *argv[]) {
+    static char previous_dir[1024] = "";
+    char current_dir[1024];
     const char *path;
-    
+
+    if (getcwd(current_dir, sizeof(current_dir)) == NULL) {
+        perror("cd: getcwd");
+        return 1;
+    }
+
     if (argc < 2) {
         path = getenv("HOME");
         if (!path) {
             fprintf(stderr, "cd: HOME not set\n");
             return 1;
         }
+    } else if (argc > 2) {
+        fprintf(stderr, "cd: too many arguments\n");
+        return 1;
+    } else if (strcmp(argv[1], "-") == 0) {
+        if (previous_dir[0] == '\0') {
+            fprintf(stderr, "cd: OLDPWD not set\n");
+            return 1;
+        }
+        path = previous_dir;
+        printf("%s\n", path);
     } else {
         path = argv[1];
     }
@@ -40,6 +57,10 @@ int builtin_cd(int argc, char *argv[]) {
         perror("cd");
         return 1;
     }
+
+    // Update previous directory for future cd - usage
+    strncpy(previous_dir, current_dir, sizeof(previous_dir) - 1);
+    previous_dir[sizeof(previous_dir) - 1] = '\0';
 
     return 0;
 }

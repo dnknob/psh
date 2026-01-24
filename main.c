@@ -103,6 +103,12 @@ int parse_command(char *input, char ***argv_ptr) {
     }
 
     char *token = strtok(input, " \t");
+    if (token == NULL) {
+        free(argv);
+        *argv_ptr = NULL;
+        return 0;
+    }
+    
     while (token != NULL && argc < (int)max_args - 1) {
         argv[argc++] = token;
         token = strtok(NULL, " \t");
@@ -158,16 +164,16 @@ int execute_builtin(int argc, char **argv, Job jobs[], int *job_count) {
 }
 
 void reap_background_jobs(Job jobs[], int *job_count) {
-    for (int i = 0; i < *job_count; i++) {
+    int i = 0;
+    while (i < *job_count) {
         int status;
         pid_t result = waitpid(jobs[i].pid, &status, WNOHANG | WUNTRACED);
 
         if (result > 0 && (WIFEXITED(status) || WIFSIGNALED(status))) {
-            for (int j = i; j < *job_count - 1; j++) {
-                jobs[j] = jobs[j + 1];
-            }
+            memmove(&jobs[i], &jobs[i + 1], (*job_count - i - 1) * sizeof(Job));
             (*job_count)--;
-            i--;
+        } else {
+            i++;
         }
     }
 }
@@ -177,9 +183,11 @@ int execute_external(char **argv, int background, Job jobs[], int *job_count, pi
     int exit_status = 0;
 
     if (pid == 0) {
-        setpgid(0, 0);
+        pid_t child_pid = getpid();
+        setpgid(child_pid, child_pid);
+
         if (!background) {
-            tcsetpgrp(STDIN_FILENO, getpid());
+            tcsetpgrp(STDIN_FILENO, child_pid);
         }
 
         signal(SIGINT, SIG_DFL);
